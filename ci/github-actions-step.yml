@@ -1,0 +1,6 @@
+# Add this step at the end of your load-test job.
+# N8N_WEBHOOK is a repository secret holding your n8n webhook URL (production URL, not the test URL).
+- name: Send results to n8n
+  run: curl -fsS -X POST "$N8N_WEBHOOK" -H "Content-Type: application/json" -d @run.json
+  env:
+    N8N_WEBHOOK: ${{ secrets.N8N_WEBHOOK }}

@@ -1,0 +1,319 @@
+{
+  "name": "Load Test Results Bot",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "perf-results",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "97364fc7-26ca-4446-b0b3-00a0bd001567",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "webhookId": "1e273d23-86a3-44ce-94fb-ebd14a3c36f4"
+    },
+    {
+      "parameters": {
+        "jsCode": "// SLA judge: deterministic pass/fail. No AI here.\n// Input: the webhook body sent by CI (see samples/run-fail.json).\nconst run = $input.first().json.body;\nconst breaches = run.transactions\n  .filter(t => t.p95Ms > run.sla.p95Ms || t.errorPct > run.sla.errorPct)\n  .map(t => ({ ...t, overByMs: Math.max(0, t.p95Ms - run.sla.p95Ms) }));\nreturn [{ json: { ...run, breaches, status: breaches.length ? 'FAIL' : 'PASS' } }];"
+      },
+      "id": "518fde23-937d-473e-8b37-80764a7c045e",
+      "name": "SLA Judge",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "e8649bc4-da6b-4adc-a8a2-e4d7ce270165",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "FAIL",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "38179196-91b7-433a-a269-16984b6eec6c",
+      "name": "SLA breached?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        480,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Load test run data (status already decided, do not change it):\n{{ JSON.stringify({ runId: $json.runId, users: $json.users, durationMin: $json.durationMin, sla: $json.sla, status: $json.status, breaches: $json.breaches, transactions: $json.transactions }) }}",
+        "options": {
+          "systemMessage": "You are a senior performance engineer. Using only the data given, write a Slack summary under 80 words: overall status, each breached transaction with its P95 versus SLA, and one suggested area to investigate. Do not change the PASS/FAIL status. Do not invent numbers. If the baseline tool returns data, mention how the breached transactions changed versus the baseline."
+        }
+      },
+      "id": "6cac5b7c-04aa-4e5c-81b0-ca26a69f11ec",
+      "name": "AI Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        740,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "claude-sonnet-4-5"
+        },
+        "options": {
+          "maxTokensToSample": 400,
+          "temperature": 0
+        }
+      },
+      "id": "4d755794-4970-4a9a-8dae-e85beeca3e76",
+      "name": "Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        680,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "toolDescription": "Fetch the baseline load test run (JSON with the same transactions) to compare against the current run.",
+        "url": "=https://YOUR-RESULTS-SERVER/api/runs/baseline?test={{ $('SLA Judge').item.json.runId.split('-2')[0] }}",
+        "options": {}
+      },
+      "id": "08e12889-bcbd-4cd0-8eb2-32279f4dd3ee",
+      "name": "Get Baseline Run",
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.2,
+      "position": [
+        860,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "#perf-results",
+          "mode": "name"
+        },
+        "text": "=:red_circle: *FAIL* · {{ $('SLA Judge').item.json.runId }} ({{ $('SLA Judge').item.json.users }} users, {{ $('SLA Judge').item.json.durationMin }} min)\n\n{{ $json.output }}",
+        "otherOptions": {}
+      },
+      "id": "34164b67-1a80-456d-8138-88f0a05ac346",
+      "name": "Slack: FAIL report",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [
+        1080,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "jiraVersion": "cloud",
+        "project": {
+          "__rl": true,
+          "value": "PERF",
+          "mode": "id"
+        },
+        "issueType": {
+          "__rl": true,
+          "value": "Bug",
+          "mode": "name"
+        },
+        "summary": "={{ $('SLA Judge').item.json.runId }}: {{ $('SLA Judge').item.json.breaches.map(b => b.name).join(', ') }} P95 SLA breach",
+        "additionalFields": {
+          "description": "=Run: {{ $('SLA Judge').item.json.runId }}\nUsers: {{ $('SLA Judge').item.json.users }} · Duration: {{ $('SLA Judge').item.json.durationMin }} min\nSLA: P95 <= {{ $('SLA Judge').item.json.sla.p95Ms }} ms, errors <= {{ $('SLA Judge').item.json.sla.errorPct }}%\n\nBreached transactions:\n{{ $('SLA Judge').item.json.breaches.map(b => `- ${b.name}: P95 ${b.p95Ms} ms (over by ${b.overByMs} ms), errors ${b.errorPct}%`).join('\\n') }}\n\nAI summary:\n{{ $('AI Agent').item.json.output }}"
+        }
+      },
+      "id": "cf777591-2805-4895-b3e6-8988bb914794",
+      "name": "Jira: create bug",
+      "type": "n8n-nodes-base.jira",
+      "typeVersion": 1,
+      "position": [
+        1320,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "#perf-results",
+          "mode": "name"
+        },
+        "text": "=:large_green_circle: *PASS* · {{ $json.runId }} ({{ $json.users }} users, {{ $json.durationMin }} min)\nAll transactions within SLA (P95 <= {{ $json.sla.p95Ms }} ms, errors <= {{ $json.sla.errorPct }}%).\n{{ $json.transactions.map(t => `• ${t.name}: P95 ${t.p95Ms} ms, errors ${t.errorPct}%`).join('\\n') }}",
+        "otherOptions": {}
+      },
+      "id": "bffb6985-ff13-41e5-be1b-276b92e9aee6",
+      "name": "Slack: PASS report",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [
+        740,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: true, runId: $('SLA Judge').item.json.runId, status: $('SLA Judge').item.json.status } }}",
+        "options": {}
+      },
+      "id": "de078ff7-acc7-4459-866d-107138c72afa",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1560,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "SLA Judge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SLA Judge": {
+      "main": [
+        [
+          {
+            "node": "SLA breached?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SLA breached?": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Slack: PASS report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Baseline Run": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Slack: FAIL report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack: FAIL report": {
+      "main": [
+        [
+          {
+            "node": "Jira: create bug",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Jira: create bug": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack: PASS report": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

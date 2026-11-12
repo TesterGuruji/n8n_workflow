@@ -1,0 +1,26 @@
+{
+  "runId": "checkout-load-2026-11-11-01",
+  "users": 500,
+  "durationMin": 30,
+  "transactions": [
+    {
+      "name": "Login",
+      "p95Ms": 820,
+      "errorPct": 0.1
+    },
+    {
+      "name": "Search",
+      "p95Ms": 1450,
+      "errorPct": 0.3
+    },
+    {
+      "name": "Checkout",
+      "p95Ms": 3800,
+      "errorPct": 1.2
+    }
+  ],
+  "sla": {
+    "p95Ms": 2000,
+    "errorPct": 1.0
+  }
+}
